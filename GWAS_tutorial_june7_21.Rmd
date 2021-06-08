@@ -1,0 +1,233 @@
+---
+title: "GWAS Tutorial"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::robobook:
+    highlight: kate
+---
+
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+## What is GWAS? 
+
+GWAS, a Genome-Wide Association Study, is a type of genetic mapping similar to QTL mapping in that its goal is to uncover genetic loci that underlie a trait. It differs, however, in several fundamental ways.
+
+To understand the genetic basis of a trait, you need to analyze a population that is variable in **both** genetics and traits. GWAS and QTL mapping differ fundamentally in how they generate that population. In QTL mapping, researchers use controlled crosses and inbreeding, but GWAS simply collects many genotypes from many populations, essentially taking advantage of natural crosses to do the work of creating the mapping population. 
+
+While QTL mapping can generates likelihood for positions across the genome using relatively few genetic markers, GWAS usually requires many more. One of the reasons that QTL mapping wwas more common in the past is that the deep sequencing required for GWAS was prohibitively expensive until recently. 
+
+One of the simplest ways to think about GWAS is that it performs a simple statistical test, like a t-test, for two alternate alleles at each SNP across the entire genome. For instance, imagine a GWAS for salt tolerance in *Mimulus*. If we started with SNP1_1, with two alleles 'A' and 'a', we would have three potential genotypes, 'AA', 'Aa', and 'aa'. If we measured salt tolerance in 25 plants with each genotype, the results might look something like this:
+
+```{r, echo=FALSE}
+library(ggplot2)
+set.seed(483)
+salt<-data.frame(Genotype=c(rep("AA", 25), rep("Aa", 25), rep("aa", 25)), 
+                    Phenotype1=c(sample(1:20,25, replace=T), 
+                                sample(2:20,25, replace=T),
+                                sample(2:21,25, replace=T)),
+                    Phenotype2=c(sample(1:20,25, replace=T), 
+                                sample(10:40,25, replace=T),
+                                sample(20:50,25, replace=T)))
+
+
+library(patchwork)
+
+a<-ggplot(salt, aes(x=Genotype, y=Phenotype1))+
+  geom_jitter(col="firebrick", width=.2)+
+  labs(x="Neutral SNP", y="Salt Tolerance")+
+  theme_classic()
+a
+
+
+```
+
+But a different SNP, SNP1_42, might have a different pattern across the genotypes
+
+```{r, echo=FALSE}
+b<-ggplot(salt, aes(x=Genotype, y=Phenotype2))+
+  geom_jitter(col="firebrick", width=.2)+
+  labs(x="Potential causal SNP", y="Salt Tolerance")+
+  theme_classic()
+  
+a+b
+```
+
+If you saw the pattern on the right, you might guess that the genotypes differ in their salt tolerance at SNP1_42, but not SNP1_1. You could test that by doing a two-sample t-test between the mean of all individuals that have an 'A' allele and all indivuals with a 'a' allele.
+
+```{r, echo=F}
+salt_A <- salt[salt$Genotype %in% c("AA","Aa"),]
+salt_a <- salt[salt$Genotype %in% c("Aa","aa"),]
+salt_A$allele<-"A"
+salt_a$allele<-"a"
+salt2<-rbind(salt_A,salt_a)
+
+ggplot(salt2, aes(x=allele, y=Phenotype2))+
+  geom_jitter(col="firebrick", width=.2)+
+  labs(x="SNP1_42", y="Salt Tolerance")+
+  theme_classic()
+
+t.test(salt2$Phenotype2~salt2$allele)
+```
+
+The p-value is low and the difference in means is high, so there is probably a good correlation between that SNP and the phenotype! Just do that 10 million more times, and you have a GWAS. 
+
+Of course, it's more complicated than that. One wrinkle you may have noticed is the heterozygotes that have both 'A' and 'a'. To account for those, we use a linear regression model that's a bit more flexible than a t-test. If you are testing a phenotype that is categorical, like survival, you can also use a logistic model, but the theory is the same. 
+
+## Running a GWAS with bigsnpr
+
+The concept of GWAS isn't too challenging, but getting to a good result can be. This tutorial will run through conducting a simple GWAS analysis on over-simplified data, then show an example using real data. 
+
+First, make sure you have the right software set up. We will be using R for the whole tutorial. Check that you have the most recent version downloaded, and install the following packages:
+
+```{r, echo=T, eval=F}
+install.packages("remotes")
+library(remotes)
+remotes::install_github("privefl/bigsnpr")
+remotes::install_github("Alice-MacQueen/switchgrassGWAS")
+install.packages("tidyverse")
+
+library(bigsnpr)
+library(switchgrassGWAS)
+library(tidyverse)
+```
+
+At a minimum, make sure you can get the *bigsnpr* package. 
+
+The data files for the tutorial can be found on my github: LINK
+
+Set up your R environment, and import the SNP file. 
+
+### Aside 
+bigsnpr uses a backing file system that saves processing power by 'attaching' the big SNP file to R, instead of fully loading it. This helps keep R from crashing, but makes things more confusing. Think of the .bk file as the raw data and the .rds file as instructions to R for how to read and process that data. 
+
+```{r, echo=T}
+library(bigsnpr)
+library(switchgrassGWAS)
+library(tidyverse)
+
+#make sure you don't have any important files in R
+# then clear your environment
+rm(list = ls())
+
+#set this to where your .rds and .bk files are. You can check if you have it right with getwd()
+setwd("~/Downloads")
+
+#The .rds and .bk files must be in the same place
+
+#Attach the SNP file
+gwas1<-snp_attach("Pvirgatum_tutorial_sub.rds")
+
+#or in one line: gwas1<-snp_attach("~/Downloads/Pvirgatum_tutorial_sub.rds")
+```
+
+Now that your SNP file is imported, here are some basic ways you can find information about it. 
+
+```{r, echo=T}
+#get basic info about your SNP object. This tutorial uses a reduced subset of the full GWAS SNP set. 
+summary(gwas1)
+
+#each switchgrass genotype is a row in the first part of the SNP object, 'genotypes'
+#we can count them with:
+nrow(gwas1$genotypes)
+
+#each SNP is a column.
+#we can count them too with:
+ncol(gwas1$genotypes)
+
+#the other two parts of the SNP object contain information about the genotypes in 'fam', and the SNPs in 'map'
+#for this GWAS, you will only care about the sample names. Let's look at the first 5
+gwas1$fam$sample.ID[1:5]
+
+#or you can see all of them with: 
+#gwas1$fam$sample.ID
+
+#The 'map' has a lot more info, like names for SNPs, the chromosome they are on, their position, and alleles
+#here are the first 5. 
+gwas1$map[1:5,]
+
+#here's how to get info on a specific SNP for which you know the name
+#map data
+gwas1$map[gwas1$map$marker.ID=="Chr01K_87050",]
+#Here is its distribution across first 20 genotypes
+gwas1$genotypes[1:20,gwas1$map$marker.ID=="Chr01K_87050"]
+
+#this will give you the allele distribution for all genotypes for a SNP
+#data.frame(names=gwas1$fam$sample.ID,
+#           geno=gwas1$genotypes[,gwas1$map$marker.ID=="Chr01K_87050"])
+```
+
+Now that you have an understanding of your SNP object, we can run a GWAS!
+
+```{r, echo=T}
+#first we need a phenotype! Let's use FAKE DATA
+#set.seed(836)
+pheno1<-sample(100:999,length(gwas1$fam$sample.ID), replace = T)
+
+phenofake1<-data.frame(PLANT_ID=gwas1$fam$sample.ID,
+                       pheno=pheno1)
+
+#let's cut to the chase and do a GWAS! This one uses linear regression (LinReg)
+gwas_fake1<-big_univLinReg(X = gwas1$genotypes,
+               y.train = phenofake1$pheno)
+
+#hey, that was easy! But what's the result?
+
+#the plotting function hates switchgrass' letters in chromosome names, so we need a trick here
+#chrom_num<-as.numeric(as.factor(gwas1$map$chromosome))
+
+#snp_manhattan(gwas_fake1, infos.chr = chrom_num, infos.pos = gwas1$map$physical.pos)
+#plotting all of those points takes time, but you should get a pretty plot shortly
+#the x-axis shows the position of each SNP on the genome, and the y-axis indicates the degree of difference in the phenotype between alleles at particular SNPs
+```
+
+Now you have done a GWAS! The high points on the Manhattan plot represent SNPs that may be associated to your phenotype. But there are a few steps you should take to figure out how good your GWAS run was.
+
+```{r, echo=T}
+#Since GWAS performs many many statistical tests, we have to correct for multiple testing. The simplest cutoff is a Bonferroni-corrected alpha. Start with your normal p=0.05, then divide by the number of tests you performed (one per SNP)
+bonf_cut=0.05/(ncol(gwas1$genotypes))
+
+#take the -log so we can compare it to the Manhattan plot
+log_bonf<-(-log10(bonf_cut))
+
+#points above this cutoff are more likely to be truly associated to the phenotype
+
+#you should also check the quantile-quantile plot
+
+snp_qq(gwas = gwas_fake1)
+```
+
+Since many of the points are below the line on the Q-Q plot, the observed -log p-values are lower than expected, which isn't too surprising with fake data. 
+Ideally the lower points should follow the red line at lower values, then be above the line at higher, indicating the true outlier SNPs. 
+
+The final step in this example is to check your outliers! You can do this a few ways, but this is the easiest
+
+```{r, echo=T}
+#add SNP names and pvals to your output object
+gwas_fake1$SNP_name<-gwas1$map$marker.ID
+gwas_fake1$pval<-(-stats::predict(gwas_fake1))
+
+#get the SNPs with the -log p-values over the Bonferroni cutoff.
+outliers_fake1<-gwas_fake1[gwas_fake1$pval>log_bonf,]
+outliers_fake1
+
+#you can adjust this cutoff lower to investigate more SNPs as data exploration, it is considered quite conservative. Most studies correct p-values with a False Discovery Rate (FDR) correction. 
+
+```
+
+
+
